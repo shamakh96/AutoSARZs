@@ -34,4 +34,10 @@ typedef enum
 }Std_ReturnType;
 
 
+typedef enum
+{
+	False,
+	True
+}Boolean ;
+
 #endif /* STD_TYPES_H_ */

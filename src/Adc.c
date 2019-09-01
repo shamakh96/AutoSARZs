@@ -10,7 +10,7 @@
 
 #include "Adc_Reg.h"
 #include "Det.h"
-
+#include "avr/interrupt.h"
 
 
 /*
@@ -19,7 +19,8 @@
  */
 STATIC Adc_ConfigType*  g_Adc_Configuration_Ptr = NULL_PTR ;
 STATIC uint8 Adc_Status = ADC_NOT_INITIALIZED ;
-
+STATIC Boolean newDataFlag = False ;
+STATIC uint8 validData[NO_CONFIGURED_GROUPS] = {0} ;
 
 
 
@@ -61,7 +62,7 @@ void Adc_Init (const Adc_ConfigType* ConfigPtr)
 
 /************************************************************************************
 * Service Name: Adc_DeInit
-* Service ID[hex]: 0x00
+* Service ID[hex]: 0x01
 * Sync/Async: Synchronous
 * Reentrancy: Non reentrant
 * Parameters (in): None
@@ -192,11 +193,18 @@ void Adc_DisableGroupNotification (Adc_GroupType Group)
 void Adc_EnableHardwareTrigger( Adc_GroupType Group )
 {
 
+	Adc_TriggerSourceType trigger ;
+	trigger = g_Adc_Configuration_Ptr->HwUnit.Group[Group].AdcGroupTriggSrc ;
 
-	ADCSRA |= (STD_ON << ADATE ) ;
-	SFIOR = (SFIOR & 0x1F)  |  ( g_Adc_Configuration_Ptr->HwUnit.Group[Group].AdcHwTrigTimer  <<  ADTS0) ;
-	g_Adc_Configuration_Ptr->HwUnit.Group[Group].status =  ADC_BUSY ;
-
+	if (trigger == ADC_TRIGG_SRC_HW )
+	{
+		ADMUX |= (ADMUX & ~(ADMUX_Channel_Mask) ) | (Group & ADMUX_Channel_Mask) ;
+		ADCSRA |= (STD_ON << ADATE )| (STD_ON << ADIE) ;
+		SFIOR = (SFIOR & 0x1F)  |  ( g_Adc_Configuration_Ptr->HwUnit.Group[Group].AdcHwTrigTimer  <<  ADTS0) ;
+		g_Adc_Configuration_Ptr->HwUnit.Group[Group].status =  ADC_BUSY ;
+	}
+	else
+	{}
 
 
 }
@@ -214,9 +222,16 @@ void Adc_EnableHardwareTrigger( Adc_GroupType Group )
 void Adc_DisableHardwareTrigger( Adc_GroupType Group )
 {
 
+	Adc_TriggerSourceType trigger ;
+	trigger = g_Adc_Configuration_Ptr->HwUnit.Group[Group].AdcGroupTriggSrc ;
 
-	ADCSRA &= ~(STD_ON << ADATE ) ;
-	g_Adc_Configuration_Ptr->HwUnit.Group[Group].status =  ADC_IDLE	 ;
+	if (trigger == ADC_TRIGG_SRC_HW )
+	{
+		ADCSRA &= ~(STD_ON << ADATE ) & ~(STD_ON << ADIE ) ;
+		g_Adc_Configuration_Ptr->HwUnit.Group[Group].status =  ADC_IDLE	 ;
+	}
+	else
+	{}
 
 }
 #endif
@@ -244,8 +259,9 @@ void Adc_StartGroupConversion (Adc_GroupType Group)
 	if (trigger == ADC_TRIGG_SRC_SW )
 	{
 		ADMUX |= (ADMUX & ~(ADMUX_Channel_Mask) ) | (Group & ADMUX_Channel_Mask) ;
-		ADCSRA |= (STD_ON  << ADSC );
+		ADCSRA |= (STD_ON  << ADSC ) | (STD_ON << ADIE );
 		g_Adc_Configuration_Ptr->HwUnit.Group[Group].status =  ADC_BUSY ;
+
 	}
 
 	else
@@ -274,8 +290,9 @@ void Adc_StopGroupConversion (Adc_GroupType Group)
 	if (trigger == ADC_TRIGG_SRC_SW )
 	{
 
-		ADCSRA |= (STD_OFF  << ADSC );
+		ADCSRA &= ~(STD_ON  << ADSC ) & ~(STD_ON << ADIE) ;
 		g_Adc_Configuration_Ptr->HwUnit.Group[Group].status =  ADC_IDLE ;
+
 	}
 	else
 	{
@@ -316,11 +333,11 @@ Adc_StatusType Adc_GetGroupStatus(  Adc_GroupType Group )
 * Service ID[hex]: 0x09
 * Sync/Async: Synchronous
 * Reentrancy: Reentrant
-* Parameters (in): Group		- Numeric ID of requested ADC channel group
+* Parameters (in): Group			- Numeric ID of requested ADC channel group
 * Parameters (inout): None
-* Parameters (out): None
+* Parameters (out): DataBufferPtr 	- ADC results of all channels of the selected group
 * Return value: Adc_StatusType	- Conversion Status for the requested Group
-* Description: Stops the conversion of all channels f the requested adc channel group
+* Description: Reads group conversion results of the last completed conversion of requesed group
 ************************************************************************************/
 Std_ReturnType Adc_ReadGroup (
 		Adc_GroupType Group,
@@ -353,8 +370,93 @@ Std_ReturnType Adc_ReadGroup (
 #endif
 
 
+Adc_StreamNumSampleType Adc_GetStreamLastPointer (
+		Adc_GroupType Group,
+		Adc_ValueGroupType ** PtrToSamplePtr
+
+)
+{
+	Adc_ValueGroupType *dataPtr ;
+	Adc_StreamBufferModeType groupBufferMode = g_Adc_Configuration_Ptr->HwUnit.Group[Group].AdcStreamingBufferMode ;
+	Adc_StatusType groupStatus = g_Adc_Configuration_Ptr->HwUnit.Group[Group].status ;
+	Adc_GroupConvModeType groupConvMode = g_Adc_Configuration_Ptr->HwUnit.Group[Group].AdcGroupConversionMode ;
+	Adc_GroupAccessModeType groupAccessMode = g_Adc_Configuration_Ptr->HwUnit.Group[Group].AdcGroupAccessMode ;
+	if (groupConvMode == ADC_CONV_MODE_ONESHOT )
+	{
+		if (groupAccessMode == ADC_ACCESS_MODE_SINGLE)
+		{
+			if (groupStatus == ADC_COMPLETED )
+			{
+				g_Adc_Configuration_Ptr->HwUnit.Group[Group].status = ADC_IDLE ;
+
+			}
+			else {}
+		}
+		else{}
+	}
+	else {}
 
 
+	dataPtr = g_Adc_Configuration_Ptr->HwUnit.Group[Group].AdcGroupBufferPtr ;
+
+
+	*PtrToSamplePtr = dataPtr ;
+
+
+
+}
+
+ISR (ADC_Vector)
+{
+
+	for (uint8 group_index = 0 ; group_index < NO_CONFIGURED_GROUPS ; group_index++)
+	{
+		if (  g_Adc_Configuration_Ptr->HwUnit.Group[group_index].status  == ADC_BUSY )
+		{
+
+			Adc_StreamNumSampleType No_StreamSamples = g_Adc_Configuration_Ptr->HwUnit.Group[group_index].AdcStreamingNumSamples ;
+			Adc_StreamBufferModeType groupBufferMode = g_Adc_Configuration_Ptr->HwUnit.Group[group_index].AdcStreamingBufferMode ;
+
+
+			validData[group_index]++ ;
+
+			if (validData[group_index] = No_StreamSamples )
+			{
+				g_Adc_Configuration_Ptr->HwUnit.Group[group_index].status = ADC_STREAM_COMPLETED ;
+
+
+			}
+
+			else if (validData[group_index] < No_StreamSamples)
+			{
+
+				g_Adc_Configuration_Ptr->HwUnit.Group[group_index].status = ADC_COMPLETED ;
+
+			}
+
+			else
+			{
+
+				if (groupBufferMode == ADC_STREAM_BUFFER_LINEAR )
+				{
+
+				}
+
+
+
+			}
+
+			g_Adc_Configuration_Ptr->HwUnit.Group[group_index].AdcGroupBufferPtr[validData[group_index]] = ADC ;
+
+
+
+		}
+
+	}
+
+
+
+}
 
 
 
