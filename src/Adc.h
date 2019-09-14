@@ -186,6 +186,14 @@ typedef struct {
 }Adc_ConfigType ;
 
 /*
+ *
+ * Extern var
+ */
+
+extern Adc_ConfigType ADC_Configurations ;
+
+
+/*
  * *********************************************************
  * Function Prototypes
  * *********************************************************
